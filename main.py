@@ -18,13 +18,16 @@ class CellTrackerApp:
         self.fgbg = StaticBackgroundSubtractor()
         self.ui = MainWindow()
         
-        # Pfade für Mock-Daten
-        self.grey_img_path = "data/mock_dirt_grey.png"
-        self.white_img_path = "data/mock_calibration_white.png"
-        
-        self.streamer = VideoStreamWorker(self.grey_img_path)
-        
+        self.streamer = VideoStreamWorker()
+
+        self.ui.slider_expo.valueChanged.connect(self.update_camera_settings)
+        self.ui.slider_gain.valueChanged.connect(self.update_camera_settings)
+        self.ui.slider_color.valueChanged.connect(self.update_camera_settings)
+
+        self.ui.btn_capture_ref.clicked.connect(self.capture_reference)
+
         # State Management
+        self.reference_image = None
         self.view_mode = "RAW" # "RAW" oder "PROCESSED"
         self.roi_center = None
         self.roi_size = 200
@@ -38,6 +41,14 @@ class CellTrackerApp:
 
         self.streamer.start()
 
+        self.update_camera_settings()
+    def capture_reference(self):
+            """Captures the current frame to use as a flat-field correction map."""
+            if self.last_full_frame is not None:
+                # Store as float32 for division math, replace 0s with 1s to prevent division by zero
+                self.reference_image = self.last_full_frame.copy().astype(np.float32)
+                self.reference_image[self.reference_image == 0] = 1 
+                self.ui.status_label.setText("Status: Dirt calibration reference saved!")
     def set_raw_mode(self):
         self.view_mode = "RAW"
         self.ui.status_label.setText("Status: Showing Raw Feed")
@@ -54,27 +65,31 @@ class CellTrackerApp:
         self.ui.status_label.setText(f"Status: ROI set to {self.roi_center}")
 
     def handle_frame(self, frame):
-        # Speichere immer den letzten Raw-Frame
-        self.last_full_frame = frame.copy()
-        
-        # 1. Processing Logic (z.B. Background Removal)
-        processed_frame = frame.copy()
-        if self.ui.btn_bg_remove.isChecked():
-            # (Subtraktions-Logik hier, falls aktiv)
-            pass 
+            self.last_full_frame = frame.copy()
+            processed_frame = frame.copy()
 
-        # --- 2. HIER IST DIE KORREKTUR FÜR DEN ROI-CROP ---
-        
-        if self.view_mode == "PROCESSED" and self.roi_center:
-            # Zeige nur den ROI-Ausschnitt
-            roi_manager = ROIManager(size=self.roi_size)
-            display_img = roi_manager.get_crop(processed_frame, self.roi_center[0], self.roi_center[1])
-        else:
-            # Im RAW Modus oder wenn keine ROI gesetzt ist: Zeige das Vollbild
-            display_img = processed_frame
+            # --- Flat-Field Correction (Dirt Removal) ---
+            if self.reference_image is not None:
+                # Calculate the mean brightness of the reference to maintain exposure levels
+                mean_ref = np.mean(self.reference_image)
+                
+                # Divide raw image by reference map (removes shadows/dirt) and normalize
+                corrected = (processed_frame.astype(np.float32) / self.reference_image) * mean_ref
+                
+                # Clip values back to standard image range 0-255
+                processed_frame = np.clip(corrected, 0, 255).astype(np.uint8)
 
-        # Sende das (richtig beschnittene) Bild an die UI
-        self._update_ui(display_img)
+            # 1. Processing Logic (e.g., Background Removal)
+            if self.ui.btn_bg_remove.isChecked():
+                pass 
+
+            if self.view_mode == "PROCESSED" and self.roi_center:
+                roi_manager = ROIManager(size=self.roi_size)
+                display_img = roi_manager.get_crop(processed_frame, self.roi_center[0], self.roi_center[1])
+            else:
+                display_img = processed_frame
+
+            self._update_ui(display_img)
         
     def _update_ui(self, cv_img):
             try:
@@ -99,6 +114,23 @@ class CellTrackerApp:
     def run(self):
         self.ui.show()
         return self.app.exec()
+    
+
+
+
+    def update_camera_settings(self):
+  
+        expo = self.ui.slider_expo.value()
+        gain = self.ui.slider_gain.value()
+        color = self.ui.slider_color.value()
+
+        self.ui.label_expo.setText(f"Exposure: {expo}ms")
+        self.ui.label_gain.setText(f"Gain: {gain}%")
+        self.ui.label_color.setText(f"Color Temp: {color}K")
+
+        self.streamer.set_exposure(expo)
+        self.streamer.set_gain(gain)
+        self.streamer.set_white_balance(color)
 
 if __name__ == "__main__":
     tracker = CellTrackerApp()
