@@ -2,6 +2,7 @@ import sys
 import os
 import numpy as np
 import time
+import cv2
 from PyQt6.QtCore import QThread, pyqtSignal
 
 # Add the vendor directory to the system path so toupcam can be imported
@@ -43,7 +44,7 @@ class VideoStreamWorker(QThread):
             # Convert the raw byte buffer into a structured NumPy array
             img = np.frombuffer(self.buf, dtype=np.uint8)
             img = img.reshape((self.img_height, self.img_width, 3))
-            
+            img = cv2.flip(img,-1)
             # The ToupTek SDK outputs BGR by default, matching OpenCV
             self.image_ready.emit(img.copy())
             
